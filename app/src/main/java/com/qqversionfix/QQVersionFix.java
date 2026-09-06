@@ -5,7 +5,10 @@ import android.content.Context;
 import android.content.ContextWrapper;
 import android.content.pm.PackageInfo;
 import android.database.Cursor;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
+import android.widget.Toast;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -44,6 +47,9 @@ public class QQVersionFix implements IXposedHookLoadPackage {
     private static final Pattern SIG_PATTERN = Pattern.compile("[0-9a-fA-F]{8}");
 
     private static volatile Config sConfig;
+    private static volatile Context sAppContext;
+    private static volatile boolean sToastShown;
+    private static volatile String sStatusMessage;
 
     private static final String[] STRING_METHODS = {
             "c", "d", "e", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "s", "t"
@@ -75,6 +81,7 @@ public class QQVersionFix implements IXposedHookLoadPackage {
                                 return;
                             }
                             Context ctx = (Context) param.args[0];
+                            sAppContext = ctx.getApplicationContext();
                             XposedBridge.log(TAG + " attachBaseContext process="
                                     + (isMsf ? ":MSF" : "main"));
                             sConfig = loadConfig(ctx);
@@ -88,8 +95,14 @@ public class QQVersionFix implements IXposedHookLoadPackage {
                                 hookInjectorA(lpparam.classLoader);
                                 hookQua(lpparam.classLoader);
                                 hookPackageManager(lpparam.classLoader);
+                                sStatusMessage = buildSuccessStatus();
                             } catch (Throwable t) {
                                 XposedBridge.log(TAG + " hook AppSetting failed: " + t);
+                                sStatusMessage = "QQ 登录版本伪装\n查找失败："
+                                        + (t.getMessage() == null ? t : t.getMessage());
+                            }
+                            if (!isMsf) {
+                                showStatusOnce();
                             }
                         }
                     });
@@ -97,6 +110,36 @@ public class QQVersionFix implements IXposedHookLoadPackage {
         } catch (Throwable t) {
             XposedBridge.log(TAG + " init failed: " + t);
         }
+    }
+
+    private static void showStatusOnce() {
+        if (sToastShown || sAppContext == null || sStatusMessage == null) {
+            return;
+        }
+        sToastShown = true;
+        final String msg = sStatusMessage;
+        new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Toast.makeText(sAppContext, msg, Toast.LENGTH_LONG).show();
+                } catch (Throwable ignored) {
+                }
+            }
+        }, 2500);
+    }
+
+    private static String buildSuccessStatus() {
+        Config c = sConfig;
+        String target = c == null ? "(空)" : c.version + " / " + c.build
+                + " / " + c.date + " / " + c.sig + " / code=" + c.code;
+        return "QQ 登录版本伪装\n"
+                + "AppSetting 查找成功\n"
+                + "当前版本：" + OLD_VERSION + "\n"
+                + "构建号：" + OLD_BUILD + "\n"
+                + "日期：" + OLD_DATE + "\n"
+                + "签名：" + OLD_SIG + "\n"
+                + "伪装目标：" + target;
     }
 
     private static void hookAppSetting(ClassLoader cl) {
