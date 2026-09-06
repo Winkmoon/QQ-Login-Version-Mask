@@ -1,0 +1,27 @@
+name: Add repository topics
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  administration: write
+
+jobs:
+  topics:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add topics
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh repo edit "$GITHUB_REPOSITORY" \
+            --add-topic lsposed \
+            --add-topic xposed \
+            --add-topic xposed-module \
+            --add-topic qq \
+            --add-topic tencent-qq \
+            --add-topic android \
+            --add-topic hook
