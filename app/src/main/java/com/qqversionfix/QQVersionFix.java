@@ -96,11 +96,10 @@ public class QQVersionFix implements IXposedHookLoadPackage {
                                 hookInjectorA(lpparam.classLoader);
                                 hookQua(lpparam.classLoader);
                                 hookPackageManager(lpparam.classLoader);
-                                sStatusMessage = buildSuccessStatus();
+                                sStatusMessage = "ready";
                             } catch (Throwable t) {
                                 XposedBridge.log(TAG + " hook AppSetting failed: " + t);
-                                sStatusMessage = "QQ 登录版本伪装\n查找失败："
-                                        + (t.getMessage() == null ? t : t.getMessage());
+                                sStatusMessage = null;
                             }
                         }
                     });
@@ -123,12 +122,7 @@ public class QQVersionFix implements IXposedHookLoadPackage {
                                 return;
                             }
                             sToastShown = true;
-                            final String msg = sStatusMessage;
-                            try {
-                                Toast.makeText((Context) param.thisObject,
-                                        msg, Toast.LENGTH_LONG).show();
-                            } catch (Throwable ignored) {
-                            }
+                            showStatusSequence((Context) param.thisObject);
                         }
                     });
             XposedBridge.log(TAG + " Activity onResume toast hook installed");
@@ -137,15 +131,31 @@ public class QQVersionFix implements IXposedHookLoadPackage {
         }
     }
 
-    private static String buildSuccessStatus() {
+    private static void showStatusSequence(final Context ctx) {
+        final String findOk = "AppSetting 查找成功";
+        final String current = "当前实际版本: " + OLD_VERSION
+                + " (build " + OLD_BUILD + ")";
+        final String target = "伪装目标: " + targetSummary();
+        toastLater(ctx, findOk, 600);
+        toastLater(ctx, current, 3000);
+        toastLater(ctx, target, 5400);
+    }
+
+    private static void toastLater(final Context ctx, final String msg, long delay) {
+        new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show();
+                } catch (Throwable ignored) {
+                }
+            }
+        }, delay);
+    }
+
+    private static String targetSummary() {
         Config c = sConfig;
-        String target = c == null ? "(空)" : c.version
-                + " (build " + c.build + ")";
-        return "QQ 登录版本伪装已生效\n"
-                + "AppSetting 查找成功\n"
-                + "当前版本: " + OLD_VERSION
-                + " (build " + OLD_BUILD + ")\n"
-                + "伪装目标: " + target;
+        return c == null ? "(空)" : c.version + " (build " + c.build + ")";
     }
 
     private static void hookAppSetting(ClassLoader cl) {
