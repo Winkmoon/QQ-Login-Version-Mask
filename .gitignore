@@ -1,0 +1,7 @@
+build/
+*.apk
+keystore.jks
+.idea/
+*.iml
+local.properties
+.DS_Store

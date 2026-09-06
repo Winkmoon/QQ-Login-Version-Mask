@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.qqversionfix"
+    android:versionCode="1"
+    android:versionName="0.1">
+
+    <uses-sdk
+        android:minSdkVersion="23"
+        android:targetSdkVersion="31" />
+
+    <application
+        android:allowBackup="false"
+        android:hasCode="true"
+        android:label="QQ 登录版本伪装">
+
+        <meta-data
+            android:name="xposedmodule"
+            android:value="true" />
+        <meta-data
+            android:name="xposeddescription"
+            android:value="自定义 QQ AppSetting 版本信息，绕过版本过低提示" />
+        <meta-data
+            android:name="xposedminversion"
+            android:value="82" />
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <provider
+            android:name=".ConfigProvider"
+            android:authorities="com.qqversionfix.provider"
+            android:exported="true" />
+    </application>
+</manifest>
