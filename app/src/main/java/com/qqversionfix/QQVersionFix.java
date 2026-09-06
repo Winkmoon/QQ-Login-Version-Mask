@@ -1,5 +1,6 @@
 package com.qqversionfix;
 
+import android.app.Activity;
 import android.app.Application;
 import android.content.Context;
 import android.content.ContextWrapper;
@@ -101,45 +102,50 @@ public class QQVersionFix implements IXposedHookLoadPackage {
                                 sStatusMessage = "QQ 登录版本伪装\n查找失败："
                                         + (t.getMessage() == null ? t : t.getMessage());
                             }
-                            if (!isMsf) {
-                                showStatusOnce();
-                            }
                         }
                     });
             XposedBridge.log(TAG + " installed Application.attachBaseContext hook");
+            if (!isMsf) {
+                hookActivityToast();
+            }
         } catch (Throwable t) {
             XposedBridge.log(TAG + " init failed: " + t);
         }
     }
 
-    private static void showStatusOnce() {
-        if (sToastShown || sAppContext == null || sStatusMessage == null) {
-            return;
+    private static void hookActivityToast() {
+        try {
+            XposedHelpers.findAndHookMethod(Activity.class, "onResume",
+                    new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            if (sToastShown || sStatusMessage == null) {
+                                return;
+                            }
+                            sToastShown = true;
+                            final String msg = sStatusMessage;
+                            try {
+                                Toast.makeText((Context) param.thisObject,
+                                        msg, Toast.LENGTH_LONG).show();
+                            } catch (Throwable ignored) {
+                            }
+                        }
+                    });
+            XposedBridge.log(TAG + " Activity onResume toast hook installed");
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + " hookActivityToast failed: " + t);
         }
-        sToastShown = true;
-        final String msg = sStatusMessage;
-        new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    Toast.makeText(sAppContext, msg, Toast.LENGTH_LONG).show();
-                } catch (Throwable ignored) {
-                }
-            }
-        }, 2500);
     }
 
     private static String buildSuccessStatus() {
         Config c = sConfig;
-        String target = c == null ? "(空)" : c.version + " / " + c.build
-                + " / " + c.date + " / " + c.sig + " / code=" + c.code;
-        return "QQ 登录版本伪装\n"
+        String target = c == null ? "(空)" : c.version
+                + " (build " + c.build + ")";
+        return "QQ 登录版本伪装已生效\n"
                 + "AppSetting 查找成功\n"
-                + "当前版本：" + OLD_VERSION + "\n"
-                + "构建号：" + OLD_BUILD + "\n"
-                + "日期：" + OLD_DATE + "\n"
-                + "签名：" + OLD_SIG + "\n"
-                + "伪装目标：" + target;
+                + "当前版本: " + OLD_VERSION
+                + " (build " + OLD_BUILD + ")\n"
+                + "伪装目标: " + target;
     }
 
     private static void hookAppSetting(ClassLoader cl) {
