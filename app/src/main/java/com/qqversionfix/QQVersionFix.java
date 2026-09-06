@@ -12,6 +12,8 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.InputStreamReader;
 import java.lang.reflect.Field;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
@@ -29,12 +31,17 @@ public class QQVersionFix implements IXposedHookLoadPackage {
 
     static final String TAG = "QQVersionFix";
 
-    // Defaults of the currently analysed QQ 9.2.15. We replace these substrings
-    // with whatever the user saves in the module UI.
-    private static final String OLD_VERSION = "9.2.15";
-    private static final String OLD_BUILD = "29600";
-    private static final String OLD_DATE = "2025-09-09";
-    private static final String OLD_SIG = "012a1717";
+    // Baselines are detected automatically from the actual AppSetting class at
+    // runtime. The fallback values are only used if detection somehow fails.
+    private static String OLD_VERSION = "9.1.25";
+    private static String OLD_BUILD = "21820";
+    private static String OLD_DATE = "2024-12-10";
+    private static String OLD_SIG = "008c1bb3";
+
+    private static final Pattern VERSION_PATTERN = Pattern.compile("\\d+\\.\\d+\\.\\d+");
+    private static final Pattern BUILD_PATTERN = Pattern.compile("\\d{4,6}");
+    private static final Pattern DATE_PATTERN = Pattern.compile("\\d{4}-\\d{2}-\\d{2}");
+    private static final Pattern SIG_PATTERN = Pattern.compile("[0-9a-fA-F]{8}");
 
     private static volatile Config sConfig;
 
@@ -42,15 +49,22 @@ public class QQVersionFix implements IXposedHookLoadPackage {
             "c", "d", "e", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "s", "t"
     };
 
+    private static final String QUA_PREFIX = "V1_AND_SQ_";
+    private static final String QUA_SUFFIX = "_YYB_D";
+
     @Override
     public void handleLoadPackage(final LoadPackageParam lpparam) {
         if (!"com.tencent.mobileqq".equals(lpparam.packageName)) {
             return;
         }
-        // Only the main QQ process performs login.
-        if (!"com.tencent.mobileqq".equals(lpparam.processName)) {
+        // The real MSF/native packet is built in the :MSF process, so the
+        // module must also run there to spoof the version seen by the server.
+        String process = lpparam.processName;
+        if (!"com.tencent.mobileqq".equals(process)
+                && !"com.tencent.mobileqq:MSF".equals(process)) {
             return;
         }
+        final boolean isMsf = "com.tencent.mobileqq:MSF".equals(process);
 
         try {
             XposedHelpers.findAndHookMethod(ContextWrapper.class, "attachBaseContext",
@@ -61,6 +75,8 @@ public class QQVersionFix implements IXposedHookLoadPackage {
                                 return;
                             }
                             Context ctx = (Context) param.args[0];
+                            XposedBridge.log(TAG + " attachBaseContext process="
+                                    + (isMsf ? ":MSF" : "main"));
                             sConfig = loadConfig(ctx);
                             Log.i(TAG, "config=" + (sConfig == null ? null : sConfig));
                             if (sConfig == null || !sConfig.hasAny()) {
@@ -68,6 +84,9 @@ public class QQVersionFix implements IXposedHookLoadPackage {
                             }
                             try {
                                 hookAppSetting(lpparam.classLoader);
+                                hookAppSettingApi(lpparam.classLoader);
+                                hookInjectorA(lpparam.classLoader);
+                                hookQua(lpparam.classLoader);
                                 hookPackageManager(lpparam.classLoader);
                             } catch (Throwable t) {
                                 XposedBridge.log(TAG + " hook AppSetting failed: " + t);
@@ -83,6 +102,7 @@ public class QQVersionFix implements IXposedHookLoadPackage {
     private static void hookAppSetting(ClassLoader cl) {
         Class<?> appSetting = XposedHelpers.findClass("com.tencent.common.config.AppSetting", cl);
         XposedBridge.log(TAG + " AppSetting class loaded: " + appSetting.getName());
+        detectBaseline(appSetting);
 
         for (final String method : STRING_METHODS) {
             try {
@@ -100,27 +120,142 @@ public class QQVersionFix implements IXposedHookLoadPackage {
             }
         }
 
-        // f() returns the current build code as int.
+        // Also try to patch fields in case some code reads them directly.
+        patchFields(appSetting);
+    }
+
+    private static void hookAppSettingApi(ClassLoader cl) {
         try {
-            XposedBridge.hookAllMethods(appSetting, "f", new XC_MethodHook() {
+            Class<?> c = XposedHelpers.findClass(
+                    "com.tencent.mobileqq.config.api.impl.AppSettingApiImpl", cl);
+            hookStringMethod(c, "buildNum", value(1));
+            hookStringMethod(c, "getSubVersion", value(0));
+            hookStringMethod(c, "getReportVersionName", value(0));
+            hookStringMethod(c, "getVersion", new Function0<String>() {
+                @Override
+                public String invoke() {
+                    return "android " + version();
+                }
+            });
+            hookStringMethod(c, "getPublishVersionString", new Function0<String>() {
+                @Override
+                public String invoke() {
+                    return version() + "." + code();
+                }
+            });
+            XposedBridge.log(TAG + " AppSettingApiImpl hooks installed");
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + " hook AppSettingApiImpl failed: " + t);
+        }
+    }
+
+    private static void hookInjectorA(ClassLoader cl) {
+        try {
+            Class<?> c = XposedHelpers.findClass("com.tencent.mobileqq.injector.a", cl);
+            hookStringMethod(c, "d", new Function0<String>() {
+                @Override
+                public String invoke() {
+                    return "2013 " + version();
+                }
+            });
+            hookStringMethod(c, "getSubVersion", value(0));
+            hookStringMethod(c, "getVersion", new Function0<String>() {
+                @Override
+                public String invoke() {
+                    return "android " + version();
+                }
+            });
+            hookStringMethod(c, "getReportVersionName", value(0));
+            hookStringMethod(c, "f", value(1));
+            XposedBridge.log(TAG + " injector.a hooks installed");
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + " hook injector.a failed: " + t);
+        }
+    }
+
+    private static void hookQua(ClassLoader cl) {
+        try {
+            Class<?> c = XposedHelpers.findClass("cooperation.qzone.QUA", cl);
+            hookStringMethod(c, "getQUA3", new Function0<String>() {
+                @Override
+                public String invoke() {
+                    return qua();
+                }
+            });
+            hookStringMethod(c, "getVersionForHabo", new Function0<String>() {
+                @Override
+                public String invoke() {
+                    return coreQua();
+                }
+            });
+            hookStringMethod(c, "getVersionForPic", new Function0<String>() {
+                @Override
+                public String invoke() {
+                    return coreQua();
+                }
+            });
+            XposedBridge.log(TAG + " QUA hooks installed");
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + " hook QUA failed: " + t);
+        }
+    }
+
+    private static String version() {
+        Config c = sConfig;
+        return c != null && notEmpty(c.version) ? c.version : OLD_VERSION;
+    }
+
+    private static String build() {
+        Config c = sConfig;
+        return c != null && notEmpty(c.build) ? c.build : OLD_BUILD;
+    }
+
+    private static String code() {
+        Config c = sConfig;
+        return c != null && notEmpty(c.code) ? c.code : OLD_BUILD;
+    }
+
+    private static String qua() {
+        return QUA_PREFIX + version() + "_" + code() + QUA_SUFFIX;
+    }
+
+    private static String coreQua() {
+        return qua().substring(3, 25);
+    }
+
+    private static boolean notEmpty(String s) {
+        return s != null && s.length() > 0;
+    }
+
+    private interface Function0<T> {
+        T invoke();
+    }
+
+    private static Function0<String> value(final int idx) {
+        return new Function0<String>() {
+            @Override
+            public String invoke() {
+                return idx == 0 ? version() : build();
+            }
+        };
+    }
+
+    private static void hookStringMethod(Class<?> clazz, String methodName,
+                                         final Function0<String> supplier) {
+        try {
+            XposedBridge.hookAllMethods(clazz, methodName, new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) {
-                    Object result = param.getResult();
-                    if (result instanceof Integer && sConfig.build != null
-                            && sConfig.build.length() > 0) {
-                        try {
-                            param.setResult(Integer.parseInt(sConfig.build));
-                        } catch (NumberFormatException ignored) {
-                        }
+                    if (sConfig == null || !sConfig.hasAny()) {
+                        return;
                     }
+                    param.setResult(supplier.invoke());
                 }
             });
         } catch (Throwable t) {
-            XposedBridge.log(TAG + " hook f() failed: " + t);
+            XposedBridge.log(TAG + " hook " + clazz.getSimpleName() + "." + methodName
+                    + " failed: " + t);
         }
-
-        // Also try to patch fields in case some code reads them directly.
-        patchFields(appSetting);
     }
 
     private static void hookPackageManager(ClassLoader cl) {
@@ -145,7 +280,10 @@ public class QQVersionFix implements IXposedHookLoadPackage {
                             try {
                                 int code = Integer.parseInt(c.code);
                                 pi.versionCode = code;
-                                XposedHelpers.setLongField(pi, "longVersionCode", (long) code);
+                                try {
+                                    XposedHelpers.setLongField(pi, "longVersionCode", (long) code);
+                                } catch (Throwable ignored) {
+                                }
                             } catch (NumberFormatException ignored) {
                             }
                         }
@@ -154,8 +292,56 @@ public class QQVersionFix implements IXposedHookLoadPackage {
         XposedBridge.log(TAG + " PackageManager.getPackageInfo hook installed");
     }
 
+    private static void detectBaseline(Class<?> appSetting) {
+        try {
+            String version = null;
+            String build = null;
+            String date = null;
+            String sig = null;
+            for (Field f : appSetting.getDeclaredFields()) {
+                try {
+                    f.setAccessible(true);
+                    Object value = f.get(null);
+                    if (!(value instanceof String)) {
+                        continue;
+                    }
+                    String s = (String) value;
+                    if (version == null) {
+                        Matcher m = VERSION_PATTERN.matcher(s);
+                        if (m.find()) {
+                            version = m.group();
+                        }
+                    }
+                    if (build == null && s.matches("\\d{4,6}")) {
+                        build = s;
+                    }
+                    if (date == null) {
+                        Matcher m = DATE_PATTERN.matcher(s);
+                        if (m.find()) {
+                            date = m.group();
+                        }
+                    }
+                    if (sig == null && s.matches("[0-9a-fA-F]{8}")) {
+                        sig = s;
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+            if (version != null) OLD_VERSION = version;
+            if (build != null) OLD_BUILD = build;
+            if (date != null) OLD_DATE = date;
+            if (sig != null) OLD_SIG = sig;
+            XposedBridge.log(TAG + " auto baseline version=" + OLD_VERSION
+                    + " build=" + OLD_BUILD + " date=" + OLD_DATE
+                    + " sig=" + OLD_SIG);
+        } catch (Throwable t) {
+            XposedBridge.log(TAG + " auto baseline detection failed: " + t);
+        }
+    }
+
     private static void patchFields(Class<?> appSetting) {
-        String[] names = {"b", "c", "d", "e", "f", "l", "m", "n", "o", "p", "s", "t"};
+        String[] names = {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k",
+                "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w"};
         for (String name : names) {
             try {
                 Field field = appSetting.getDeclaredField(name);
